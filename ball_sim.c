@@ -1,5 +1,18 @@
+/**
+ * Ball Simulation
+ * 
+ *  - Use to simulate and observe an output of how is
+ *  ball's velocity at a time and accerolate at a time.
+ * 
+ *  - Created by Tanatorn Nateesanprasert (Big)
+ *    Computer Engineer years 3 59070501035
+ * - Created by Patipon Petchtone (Ice)
+ *    Computer Engineer years 3 59070501049
+ **/
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <mpi.h>
 #include <omp.h>
 
@@ -22,23 +35,167 @@ int main(int argc, char **argv)
     double endTime;
 
     /* Calculated Data */
-    int ballNumber;        /* ballNumber - number of balls (N)*/
-    double simNumber;      /* simNumber - number of simulation (K)*/
-    double timeResolution; /* timeResolution - resolution of time (d)*/
-    double totalTime       /* totalTime - total times (T) PS: K = T / d */
+    int ballNumber;   /* ballNumber - number of balls (N)*/
+    int simNumber;    /* simNumber - number of simulation (K)*/
+    double timeStep;  /* timeStep - resolution of time (d)*/
+    double totalTime; /* totalTime - total times (T) PS: K = T / d */
 
-        /* */
+    /* Process Information */
+    int processBallStartNumber;
+    int processBallNumber;
+    int processBallBoundNumber;
 
-        /* MPI & OMP Initialize */
+    /* Ball's Information */
+    double *ballMass;           /* Array data of all ball's mass */
+    double *ballElectricCharge; /* Array data of all ball's charge */
+    double *ballXPosition;      /* Array data of all ball's x position */
+    double *ballYPosition;      /* Array data of all ball's y position */
+    double *ballXVelocity;      /* Array data of all ball's x velocity */
+    double *ballYVelocity;      /* Array data of all ball's y velocity */
+    double *newBallXPosition;   /* Array data of all ball's x position */
+    double *newBallYPosition;   /* Array data of all ball's y position */
+    double *newBallXVelocity;   /* Array data of all ball's x velocity */
+    double *newBallYVelocity;   /* Array data of all ball's y velocity */
 
-        /* Set number of thread */
-        numThread = atoi(argv[3]);
-    omp_set_num_threads(numThread);
+    /*Force and Accel Information*/
+    double force;
+    double forceSize;
+    double deltaXVector;
+    double deltaYVector;
+    double cumulativeXForce = 0;
+    double cumulativeYForce = 0;
+    double accerolateX;
+    double accerolateY;
 
+    /* I J K */
+    int i;
+    int j;
+    int k;
+
+    /* MPI & OMP Initialize */
     /* Set MPI variable */
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numProc);
     MPI_Comm_rank(MPI_COMM_WORLD, &id);
 
-    /* Reading input from file */
+    /* Set number of thread */
+    numThread = atoi(argv[3]);
+    omp_set_num_threads(numThread);
+
+    /* MASTER CODE */
+    if (id == 0)
+    {
+        /* Open to read file*/
+        fp = fopen(argv[1], "r");
+        /* Get ballNumber and simNumber */
+        fscanf(fp, "%d %d\n", &ballNumber, &simNumber);
+        /* Get timeStep */
+        fscanf(fp, "%lf\n", &timeStep);
+    }
+
+    /* Broaccast data */
+    MPI_Bcast(&ballNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&simNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&timeStep, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    /* Allocate array for Nth ball */
+    ballMass = (double *)malloc(sizeof(double) * ballNumber);
+    ballElectricCharge = (double *)malloc(sizeof(double) * ballNumber);
+    ballXPosition = (double *)malloc(sizeof(double) * ballNumber);
+    ballYPosition = (double *)malloc(sizeof(double) * ballNumber);
+    ballXVelocity = (double *)malloc(sizeof(double) * ballNumber);
+    ballYVelocity = (double *)malloc(sizeof(double) * ballNumber);
+
+    /* Allocate array for next step Nth ball */
+    newBallXPosition = (double *)malloc(sizeof(double) * ballNumber);
+    newBallYPosition = (double *)malloc(sizeof(double) * ballNumber);
+    newBallXVelocity = (double *)malloc(sizeof(double) * ballNumber);
+    newBallYVelocity = (double *)malloc(sizeof(double) * ballNumber);
+
+    if (id == 0)
+    {
+        /* Get ball's information */
+        for (i = 0; i < ballNumber; i++)
+        {
+            fscanf(fp, "%lf %lf %lf %lf %lf %lf\n", &ballMass[i], &ballElectricCharge[i], &ballXPosition[i], &ballYPosition[i], &ballXVelocity[i], &ballYVelocity[i]);
+        }
+    }
+
+    /* Broadcast ball's information */
+    MPI_Bcast(&ballMass, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ballElectricCharge, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ballXPosition, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ballYPosition, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ballXVelocity, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ballYVelocity, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    /* Calculate each process ball number */
+    processBallNumber = ballNumber / numProc;
+    /* Calculate start index of each rank */
+    processBallStartNumber = id * processBallNumber;
+    /* Calculate each process extras ball except MASTER rank*/
+    if (id != 0)
+    {
+        /* id - 1 is capacity of extras ball that each rank can keep */
+        if (ballNumber % numProc <= id - 1)
+        {
+            /* Increment start index of each rank by extras ball */
+            processBallStartNumber = processBallStartNumber + (ballNumber % numProc);
+        }
+        else
+        {
+            /* Increment start index of each rank by their max extras ball capacity */
+            processBallStartNumber = processBallStartNumber + (id - 1);
+        }
+        /* Increment ball number of each rank if there are extras ball */
+        if (ballNumber % numProc >= id)
+        {
+            processBallNumber++;
+        }
+    }
+
+    /* Last ball in each rank */
+    processBallBoundNumber = processBallStartNumber + processBallNumber;
+
+    // /* Looping K time (Simulation number retreive from input file */
+    // for (k = 0; k < simNumber; k++)
+    // {
+
+    // }
+
+    /* Looping all ball in each rank to calculate accels and velocity */
+    for (i = processBallStartNumber; i < processBallBoundNumber; i++)
+    {
+        /* Looping all ball */
+        for (j = 0; j < ballNumber; j++)
+        {
+            /* Second ball is not equal to the first one */
+            if (j != i)
+            {
+                /* Calculate Electric Force on the ball */
+                /* F = (q1 x q2) / ((xi - xj)^2 + (yi - yj)^2) */
+                force = (ballElectricCharge[i] * ballElectricCharge[j]) / (((ballXPosition[i] - ballXPosition[j]) * (ballXPosition[i] - ballXPosition[j])) + ((ballYPosition[i] - ballYPosition[j]) * (ballYPosition[i] - ballYPosition[j])));
+
+                /* Find force vector in x axis */
+                deltaXVector = ballXPosition[j] - ballXPosition[i];
+                /* Find force vector in y axis */
+                deltaYVector = ballYPosition[j] - ballYPosition[i];
+                /* size of force = sqrt((xj-xi)^2 + (yj-yi)^2)) */
+                forceSize = sqrt(deltaXVector * deltaXVector + deltaYVector * deltaYVector);
+                /* Calculate cumulativeXForce vector and cumulativeYForce vector */
+                cumulativeXForce += force * deltaXVector / forceSize;
+                cumulativeYForce += force * deltaYVector / forceSize;
+            }
+        }
+
+        /* Summarise and calculate ball's accelorate */
+        accerolateX = cumulativeXForce / ballMass[i];
+        accerolateY = cumulativeYForce / ballMass[i];
+
+        /* Collect next ball's position and velocity */
+        newBallXPosition[i] = ballXPosition[i] + (timeStep * ballXVelocity[i]);
+        newBallYPosition[i] = ballYPosition[i] + (timeStep * ballYVelocity[i]);
+        newBallXVelocity[i] = ballXVelocity[i] + (timeStep * accerolateX);
+        newBallYVelocity[i] = ballYVelocity[i] + (timeStep * accerolateY);
+    }
 }
