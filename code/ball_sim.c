@@ -57,10 +57,10 @@ int main(int argc, char **argv)
     double *newBallYPosition;     /* Array data of all ball's y new position */
     double *newBallXVelocity;     /* Array data of all ball's x new velocity */
     double *newBallYVelocity;     /* Array data of all ball's y new velocity */
-    int *newBallValid             /* Array data of all ball's status if ball is still valid in the next step */
+    int *newBallValid;            /* Array data of all ball's status if ball is still valid in the next step */
 
-        /*Force and Accel Information*/
-        double force;
+    /*Force and Accel Information*/
+    double force;
     double forceSize;
     double deltaXVector;
     double deltaYVector;
@@ -69,10 +69,11 @@ int main(int argc, char **argv)
     double accelerateX;
     double accelerateY;
 
-    /* I J K */
+    /* I J K L */
     int i;
     int j;
     int k;
+    int l;
 
     /* MPI & OMP Initialize */
     /* Set MPI variable */
@@ -125,6 +126,10 @@ int main(int argc, char **argv)
             /* 1 = still valid and 0 = not valid anymore */
             ballValid[i] = 1;
         }
+        /* close input file */
+        fclose(fp);
+        /* Open the output file and wait for calculated data to write */
+        fp = fopen(argv[2], "w");
     }
 
     /* Broadcast ball's information */
@@ -207,6 +212,36 @@ int main(int argc, char **argv)
             }
         }
 
-        /* Every ranks isend data to adjacent ranks */
+        /* Every ranks broadcast next round data to others */
+        MPI_Bcast(&newBallXPosition[processBallStartNumber], processBallNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&newBallYPosition[processBallStartNumber], processBallNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&newBallXVelocity[processBallStartNumber], processBallNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&newBallYVelocity[processBallStartNumber], processBallNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&newBallValid[processBallStartNumber], processBallNumber, MPI_INT, 0, MPI_COMM_WORLD);
+
+        /* MASTER write the output file */
+        if (id == 0)
+        {
+            /* write all balls new XPosition, YPosition to the output file */
+            for (l = 0; l < simNumber; l++)
+            {
+                if (ballValid[l])
+                    fprintf(fp, "%lf %lf\n", newBallXPosition[l], newBallYPosition[l]);
+                else
+                    fprintf(fp, "%s\n", "out");
+            }
+            fprintf(fp, "%s\n", "---");
+        }
+
+        /* Overwritten a prev round XY position and velocity and ball's valid */
+        if (k != simNumber - 1)
+        {
+            ballXPosition = newBallXPosition;
+            ballYPosition = newBallYPosition;
+            ballXVelocity = newBallXVelocity;
+            ballYVelocity = newBallYVelocity;
+            ballValid = newBallValid;
+        }
     }
+    fclose(fp);
 }
