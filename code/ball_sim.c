@@ -1,9 +1,9 @@
 /**
  * Ball Simulation
- * 
+ *
  *  - Use to simulate and observe an output of how is
  *  ball's velocity at a time and accerolate at a time.
- * 
+ *
  *  - Created by Tanatorn Nateesanprasert (Big)
  *    Computer Engineer years 3 59070501035
  * - Created by Patipon Petchtone (Ice)
@@ -19,10 +19,6 @@
 
 int main(int argc, char **argv)
 {
-    /* Declare Variables */
-
-    /* Reading input and Writing Output */
-    FILE *fp;
 
     /* For MPI Initialize */
     int numProc;
@@ -41,22 +37,40 @@ int main(int argc, char **argv)
     numThread = atoi(argv[3]);
     omp_set_num_threads(numThread);
 
-    /* Process Information */
-    int processBallStartNumber[numProc];
-    int processBallNumber[numProc];
-    int processBallEndNumber;
-    int tempProcessBallStartNumber;
-    int tempProcessBallNumber;
+    /* Declare Variables */
 
+    /* Reading input and Writing Output */
+    FILE *fp;
+
+    /* For Calculate run time */
     double startTime;
     double endTime;
 
     /* Calculated Data */
     int ballNumber;  /* ballNumber - number of balls (N)*/
-    int timeStep;    /* timeStep - number of simulation (K)*/
-    double interval; /* interval - resolution of time (d)*/
+    int simNumber;   /* simNumber - number of simulation (K)*/
+    double timeStep; /* timeStep - resolution of time (d)*/
+
+    /* Process Information */
+    int processBallStartNumber[numProc];
+    int processBallNumber[numProc];
+    int processBallBoundNumber[numProc];
+    MPI_Request request[100];
+
+    int processBallStartNumberTmp;
+    int processBallNumberTmp;
+    int processBallStartNumberTmpLoop;
+    int processBallNumberTmpLoop;
+    int processBallBoundNumberTmp;
+
+    int diffBallProcessNumber;
+    int diffBallBoundProcessNumber;
+
+    int remainWork;
+    double start, end;
 
     /* Ball's Information */
+    int baseBallNumber;
     double *ballMass;           /* Array data of all ball's mass */
     double *ballElectricCharge; /* Array data of all ball's charge */
     double *ballXPosition;      /* Array data of all ball's x position */
@@ -64,51 +78,49 @@ int main(int argc, char **argv)
     double *ballXVelocity;      /* Array data of all ball's x velocity */
     double *ballYVelocity;      /* Array data of all ball's y velocity */
     int *ballValid;             /* Array data of all ball's status if ball has x or y less than 100000 */
-    double *newBallXPosition;   /* Array data of all ball's x new position */
-    double *newBallYPosition;   /* Array data of all ball's y new position */
-    double *newBallXVelocity;   /* Array data of all ball's x new velocity */
-    double *newBallYVelocity;   /* Array data of all ball's y new velocity */
-    int *newBallValid;          /* Array data of all ball's status if ball is still valid in the next step */
 
+    double *newBallXPosition; /* Array data of all ball's x new position */
+    double *newBallYPosition; /* Array data of all ball's y new position */
+    double *newBallXVelocity; /* Array data of all ball's x new velocity */
+    double *newBallYVelocity; /* Array data of all ball's y new velocity */
+    int *newBallValid;        /* Array data of all ball's status if ball is still valid in the next step */
+
+    double *tmpCumXForce; /* Array data of all ball's x cumForce */
+    double *tmpCumYForce; /* Array data of all ball's y cumForce */
+    double tempTmpCumXForce;
+    double tempTmpCumYForce;
     /*Force and Accel Information*/
     double force;
-    double forceSize;
     double forceSquare;
+    double forceSize;
     double deltaXVector;
     double deltaYVector;
     double cumulativeXForce = 0;
     double cumulativeYForce = 0;
+    double accelerateX;
+    double accelerateY;
 
-    /* MPI request */
-    MPI_Request request[30];
-
-    /* I J K L */
+    /* I J K L*/
     int i;
     int j;
     int k;
     int l;
-    double xi;
-    double xj;
-    double yi;
-    double yj;
-
-    startTime = MPI_Wtime();
-
+    start = MPI_Wtime();
     /* MASTER CODE */
     if (id == 0)
     {
         /* Open to read file*/
         fp = fopen(argv[1], "r");
-        /* Get ballNumber and timeStep */
-        fscanf(fp, "%d %d\n", &ballNumber, &timeStep);
-        /* Get interval */
-        fscanf(fp, "%lf\n", &interval);
+        /* Get ballNumber and simNumber */
+        fscanf(fp, "%d %d\n", &ballNumber, &simNumber);
+        /* Get timeStep */
+        fscanf(fp, "%lf\n", &timeStep);
     }
 
     /* Broadcast data */
     MPI_Bcast(&ballNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&timeStep, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&interval, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&simNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&timeStep, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     /* Allocate array for Nth ball */
     ballMass = (double *)malloc(sizeof(double) * ballNumber);
@@ -126,7 +138,6 @@ int main(int argc, char **argv)
     newBallYVelocity = (double *)malloc(sizeof(double) * ballNumber);
     newBallValid = (int *)malloc(sizeof(int) * ballNumber);
 
-    /* MASTER read file */
     if (id == 0)
     {
         /* Get ball's information */
@@ -136,68 +147,79 @@ int main(int argc, char **argv)
             /* 1 = still valid and 0 = not valid anymore */
             ballValid[i] = 1;
         }
-        /* close input file */
-        fclose(fp);
-
-        /* Open the output file and wait for calculated data to write */
-        fp = fopen(argv[2], "w");
-        for (l = 0; l < ballNumber; l++)
-            fprintf(fp, "%lf %lf\r\n", ballXPosition[l], ballYPosition[l]);
-        fprintf(fp, "%s\r\n", "---");
     }
 
     /* Broadcast ball's information */
-    MPI_Bcast(ballMass, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballElectricCharge, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballXPosition, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballYPosition, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballXVelocity, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballYVelocity, ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(ballValid, ballNumber, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Ibcast(&ballMass[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[0]);
+    MPI_Ibcast(&ballElectricCharge[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[1]);
+    MPI_Ibcast(&ballXPosition[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[2]);
+    MPI_Ibcast(&ballYPosition[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[3]);
+    MPI_Ibcast(&ballXVelocity[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[4]);
+    MPI_Ibcast(&ballYVelocity[0], ballNumber, MPI_DOUBLE, 0, MPI_COMM_WORLD, &request[5]);
+    MPI_Ibcast(&ballValid[0], ballNumber, MPI_INT, 0, MPI_COMM_WORLD, &request[6]);
 
     if (id == 0)
     {
-        tempProcessBallNumber = ballNumber / numProc;
-        int modProcessBallNumber = ballNumber % numProc;
-        for (i = 0; i < numProc; i++)
+        fp = fopen(argv[2], "w");
+        for (l = 0; l < ballNumber; l++)
         {
-            if (i == 0)
+            fprintf(fp, "%lf %lf\r\n", ballXPosition[l], ballYPosition[l]);
+        }
+        fprintf(fp, "%s\r\n", "---");
+    }
+    //printf("After first ibcast %d \n", id);
+    if (id == 1)
+    {
+        /* Calculate work of each process */
+        baseBallNumber = ballNumber / numProc;
+        processBallNumber[0] = baseBallNumber / 1;
+        remainWork = (ballNumber % numProc) + (baseBallNumber - processBallNumber[0]);
+        processBallStartNumber[0] = 0;
+        processBallBoundNumber[0] = processBallNumber[0];
+        //	printf("I am 0 start %d end %d",processBallStartNumber[0],processBallBoundNumber[0]);
+        for (i = 1; i < numProc; i++)
+        {
+            processBallNumber[i] = baseBallNumber + (remainWork / (numProc - 1));
+            if (remainWork % (numProc - 1) >= i)
             {
-                processBallNumber[i] = tempProcessBallNumber;
-                processBallStartNumber[i] = 0;
+                processBallNumber[i]++;
             }
-            else
-            {
-                processBallNumber[i] = tempProcessBallNumber;
-                processBallStartNumber[i] = processBallStartNumber[i - 1] + processBallNumber[i - 1];
-                if (modProcessBallNumber > 0)
-                {
-                    processBallNumber[i]++;
-                    modProcessBallNumber--;
-                }
-            }
+            processBallStartNumber[i] = processBallBoundNumber[i - 1];
+            processBallBoundNumber[i] = processBallStartNumber[i] + processBallNumber[i];
+            //      printf("I am %d start %d end %d",i,processBallStartNumber[i],processBallBoundNumber[i]);
         }
     }
 
-    /* broadcast processBallNumber and processBallStartNumber */
-    MPI_Bcast(processBallNumber, numProc, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(processBallStartNumber, numProc, MPI_INT, 0, MPI_COMM_WORLD);
+    /* Broadcast number of work load */
 
-    /* Calculate processBallEndNumber */
-    tempProcessBallStartNumber = processBallStartNumber[id];
-    processBallEndNumber = tempProcessBallStartNumber + processBallNumber[id];
+    MPI_Ibcast(processBallStartNumber, numProc, MPI_INT, 1, MPI_COMM_WORLD, &request[7]);
+    MPI_Ibcast(processBallBoundNumber, numProc, MPI_INT, 1, MPI_COMM_WORLD, &request[8]);
+    MPI_Ibcast(processBallNumber, numProc, MPI_INT, 1, MPI_COMM_WORLD, &request[9]);
+
+    tmpCumXForce = (double *)malloc(sizeof(double) * ballNumber);
+    tmpCumYForce = (double *)malloc(sizeof(double) * ballNumber);
+
+    MPI_Waitall(10, request, MPI_STATUS_IGNORE);
+
     /* Looping K time (Simulation number retreive from input file */
-    for (k = 0; k < timeStep; k++)
+    //printf("this is %d pbNumber = %d \n", id, processBallBoundNumber[id]);
+    //printf("before go in loop %d \n", id);
+    processBallStartNumberTmp = processBallStartNumber[id];
+    processBallBoundNumberTmp = processBallBoundNumber[id];
+    processBallNumberTmp = processBallNumber[id];
+    diffBallProcessNumber = ballNumber - processBallNumberTmp;
+    diffBallBoundProcessNumber = ballNumber - processBallBoundNumberTmp;
+    for (k = 0; k < simNumber; k++)
     {
+
         /* Looping all ball in each rank to calculate accels and velocity */
-#pragma omp parallel for private(i, j, force, deltaXVector, deltaYVector, forceSize, forceSquare) reduction(+ \
-                                                                                                            : cumulativeXForce, cumulativeYForce)
-        for (i = tempProcessBallStartNumber; i < processBallEndNumber; i++)
+
+#pragma omp parallel for schedule(guided) private(i, j, force, deltaXVector, deltaYVector, forceSize, forceSquare) reduction(+ \
+                                                                                                                             : cumulativeXForce, cumulativeYForce)
+        for (i = processBallStartNumberTmp; i < processBallBoundNumberTmp; i++)
         {
             cumulativeXForce = 0;
             cumulativeYForce = 0;
-            xi = ballXPosition[i];
-            yi = ballYPosition[i];
 
             if (ballValid[i])
             {
@@ -207,51 +229,116 @@ int main(int argc, char **argv)
                     /* Second ball is not equal to the first one */
                     if (ballValid[j] && j != i)
                     {
-                        xj = ballXPosition[j];
-                        yj = ballYPosition[j];
-                        deltaXVector = xi - xj;
-                        deltaYVector = yi - yj;
-                        forceSquare = (deltaXVector * deltaXVector) + (deltaYVector * deltaYVector);
-                        /* Calculate Electric Force on the ball */
-                        /* F = (q1 x q2) / ((xi - xj)^2 + (yi - yj)^2) */
-                        force = (ballElectricCharge[i] * ballElectricCharge[j]) / (forceSquare);
-                        /* Find force vector in x axis */
-                        // deltaXVector = xi - xj;
-                        /* Find force vector in y axis */
-                        // deltaYVector = yi - yj;
-                        /* size of force = sqrt((xj-xi)^2 + (yj-yi)^2)) */
-                        forceSize = sqrt(forceSquare);
-                        /* Calculate cumulativeXForce vector and cumulativeYForce vector */
-                        cumulativeXForce += force * deltaXVector / forceSize;
-                        cumulativeYForce += force * deltaYVector / forceSize;
+                        if (j >= processBallStartNumberTmp && j < processBallBoundNumberTmp && k != 0)
+                        {
+                            j = processBallBoundNumberTmp - 1;
+                            cumulativeXForce += tmpCumXForce[i];
+                            cumulativeYForce += tmpCumYForce[i];
+                        }
+                        else
+                        {
+                            /* Find force vector in x axis */
+                            deltaXVector = ballXPosition[i] - ballXPosition[j];
+                            /* Find force vector in y axis */
+                            deltaYVector = ballYPosition[i] - ballYPosition[j];
+                            forceSquare = (deltaXVector * deltaXVector) + (deltaYVector * deltaYVector);
+                            /* Calculate Electric Force on the ball */
+                            /* F = (q1 x q2) / ((xi - xj)^2 + (yi - yj)^2) */
+                            force = (ballElectricCharge[i] * ballElectricCharge[j]) / (forceSquare);
+
+                            /* size of force = sqrt((xj-xi)^2 + (yj-yi)^2)) */
+                            forceSize = sqrt(forceSquare);
+                            /* Calculate cumulativeXForce vector and cumulativeYForce vector */
+                            cumulativeXForce += force * deltaXVector / forceSize;
+                            cumulativeYForce += force * deltaYVector / forceSize;
+                        }
                     }
                 }
                 /* Summarise and calculate ball's accelorate */
-                // accelerateX = cumulativeXForce / ballMass[i];
-                // accelerateY = cumulativeYForce / ballMass[i];
-
+                //accelerateX = cumulativeXForce / ballMass[i];
+                //accelerateY = cumulativeYForce / ballMass[i];
+                //printf("new ball x position from rank %d is %lf \n", id, newBallXPosition[i]);
                 /* Collect next ball's position and velocity */
-                newBallXPosition[i] = xi + (interval * ballXVelocity[i]);
-                newBallYPosition[i] = yi + (interval * ballYVelocity[i]);
-                newBallXVelocity[i] = ballXVelocity[i] + (interval * cumulativeXForce / ballMass[i]);
-                newBallYVelocity[i] = ballYVelocity[i] + (interval * cumulativeYForce / ballMass[i]);
-                // newBallValid[i] = (abs(newBallXPosition[i]) > 1000000) || (abs(newBallYPosition[i]) > 1000000) ? 0 : 1;
+                newBallXPosition[i] = ballXPosition[i] + (timeStep * ballXVelocity[i]);
+                newBallYPosition[i] = ballYPosition[i] + (timeStep * ballYVelocity[i]);
+                newBallXVelocity[i] = ballXVelocity[i] + (timeStep * (cumulativeXForce / ballMass[i]));
+                newBallYVelocity[i] = ballYVelocity[i] + (timeStep * (cumulativeYForce / ballMass[i]));
+                /* If new X or Y position is more than 100000 then this ball is not valid anymore */
                 newBallValid[i] = (newBallXPosition[i] > 1000000 || newBallXPosition[i] < -1000000 || newBallYPosition[i] > 1000000 || newBallYPosition[i] < -1000000) ? 0 : 1;
             }
         }
 
-        /* Every ranks broadcast next round data to others */
-        for (i = 0; i < numProc; i++)
+        //printf("End round %d \n", id);
+
+        for (l = 0; l < numProc; l++)
         {
-            tempProcessBallStartNumber = processBallStartNumber[i];
-            tempProcessBallNumber = processBallNumber[i];
-            MPI_Bcast(&newBallXPosition[tempProcessBallStartNumber], tempProcessBallNumber, MPI_DOUBLE, i, MPI_COMM_WORLD);
-            MPI_Bcast(&newBallYPosition[tempProcessBallStartNumber], tempProcessBallNumber, MPI_DOUBLE, i, MPI_COMM_WORLD);
-            MPI_Bcast(&newBallXVelocity[tempProcessBallStartNumber], tempProcessBallNumber, MPI_DOUBLE, i, MPI_COMM_WORLD);
-            MPI_Bcast(&newBallYVelocity[tempProcessBallStartNumber], tempProcessBallNumber, MPI_DOUBLE, i, MPI_COMM_WORLD);
-            MPI_Bcast(&newBallValid[tempProcessBallStartNumber], tempProcessBallNumber, MPI_INT, i, MPI_COMM_WORLD);
+            processBallStartNumberTmpLoop = processBallStartNumber[l];
+            processBallNumberTmpLoop = processBallNumber[l];
+            MPI_Ibcast(&newBallXPosition[processBallStartNumberTmpLoop], processBallNumberTmpLoop, MPI_DOUBLE, l, MPI_COMM_WORLD, &request[l * 5 + 0]);
+            MPI_Ibcast(&newBallYPosition[processBallStartNumberTmpLoop], processBallNumberTmpLoop, MPI_DOUBLE, l, MPI_COMM_WORLD, &request[l * 5 + 1]);
+            MPI_Ibcast(&newBallXVelocity[processBallStartNumberTmpLoop], processBallNumberTmpLoop, MPI_DOUBLE, l, MPI_COMM_WORLD, &request[l * 5 + 2]);
+            MPI_Ibcast(&newBallYVelocity[processBallStartNumberTmpLoop], processBallNumberTmpLoop, MPI_DOUBLE, l, MPI_COMM_WORLD, &request[l * 5 + 3]);
+            MPI_Ibcast(&newBallValid[processBallStartNumberTmpLoop], processBallNumberTmpLoop, MPI_INT, l, MPI_COMM_WORLD, &request[l * 5 + 4]);
         }
 
+        /*Prepare data for next round*/
+        if (k != simNumber - 1)
+        {
+
+#pragma omp parallel sections
+            {
+#pragma omp section
+                memcpy(&ballXPosition[processBallStartNumberTmp], &newBallXPosition[processBallStartNumberTmp], sizeof(double) * processBallNumberTmp);
+#pragma omp section
+                memcpy(&ballYPosition[processBallStartNumberTmp], &newBallYPosition[processBallStartNumberTmp], sizeof(double) * processBallNumberTmp);
+#pragma omp section
+                memcpy(&ballXVelocity[processBallStartNumberTmp], &newBallXVelocity[processBallStartNumberTmp], sizeof(double) * processBallNumberTmp);
+#pragma omp section
+                memcpy(&ballYVelocity[processBallStartNumberTmp], &newBallYVelocity[processBallStartNumberTmp], sizeof(double) * processBallNumberTmp);
+#pragma omp section
+                memcpy(&ballValid[processBallStartNumberTmp], &newBallValid[processBallStartNumberTmp], sizeof(int) * processBallNumberTmp);
+            }
+        }
+        //printf("After last ibcast %d \n", id);
+/*Pre calculation before next Round*/
+#pragma omp parallel for schedule(guided) private(i, j, force, deltaXVector, deltaYVector, forceSize, forceSquare) reduction(+ \
+                                                                                                                             : tempTmpCumXForce, tempTmpCumYForce)
+        for (i = processBallStartNumberTmp; i < processBallBoundNumberTmp; i++)
+        {
+            tempTmpCumXForce = 0;
+            tempTmpCumYForce = 0;
+            if (ballValid[i])
+            {
+                /* Looping all ball */
+                for (j = processBallStartNumberTmp; j < processBallBoundNumberTmp; j++)
+                {
+                    /* Second ball is not equal to the first one */
+                    if (ballValid[j] && j != i)
+                    {
+                        /* Find force vector in x axis */
+                        deltaXVector = ballXPosition[i] - ballXPosition[j];
+                        /* Find force vector in y axis */
+                        deltaYVector = ballYPosition[i] - ballYPosition[j];
+                        forceSquare = (deltaXVector * deltaXVector) + (deltaYVector * deltaYVector);
+                        /* Calculate Electric Force on the ball */
+                        /* F = (q1 x q2) / ((xi - xj)^2 + (yi - yj)^2) */
+                        force = (ballElectricCharge[i] * ballElectricCharge[j]) / (forceSquare);
+                        /* size of force = sqrt((xj-xi)^2 + (yj-yi)^2)) */
+                        forceSize = sqrt(forceSquare);
+                        /* Calculate cumulativeXForce vector and cumulativeYForce vector */
+                        tempTmpCumXForce += force * deltaXVector / forceSize;
+                        tempTmpCumYForce += force * deltaYVector / forceSize;
+                    }
+                }
+            }
+            tmpCumXForce[i] = tempTmpCumXForce;
+            tmpCumYForce[i] = tempTmpCumYForce;
+        }
+
+        /*Wait for Ibcast before start new round*/
+        MPI_Waitall(5 * numProc, request, MPI_STATUS_IGNORE);
+
+        //printf("After last wait %d \n", id);
         /* MASTER write the output file */
         if (id == 0)
         {
@@ -260,40 +347,84 @@ int main(int argc, char **argv)
             {
                 // printf("rank 0 newValid: %d\n", newBallValid[l]);
                 if (newBallValid[l])
+                {
+                    // printf("---");
+                    // printf("print %lf %lf\r\n", newBallXPosition[l], newBallYPosition[l]);
                     fprintf(fp, "%lf %lf\r\n", newBallXPosition[l], newBallYPosition[l]);
+                }
                 else
                     fprintf(fp, "%s\r\n", "out");
             }
             fprintf(fp, "%s\r\n", "---");
         }
 
-        /* Overwritten a prev round XY position and velocity and ball's valid */
+        /*Copy Remain New positon to old position*/
 
-        if (k != timeStep - 1)
+        if (k != simNumber - 1)
         {
-#pragma omp parallel sections
+            if (id == 0)
             {
+#pragma omp parallel sections
+                {
 #pragma omp section
-                memcpy(ballXPosition, newBallXPosition, sizeof(double) * ballNumber);
+                    memcpy(&ballXPosition[processBallBoundNumberTmp], &newBallXPosition[processBallBoundNumberTmp], sizeof(double) * diffBallProcessNumber);
 #pragma omp section
-                memcpy(ballYPosition, newBallYPosition, sizeof(double) * ballNumber);
+                    memcpy(&ballYPosition[processBallBoundNumberTmp], &newBallYPosition[processBallBoundNumberTmp], sizeof(double) * diffBallProcessNumber);
 #pragma omp section
-                memcpy(ballXVelocity, newBallXVelocity, sizeof(double) * ballNumber);
+                    memcpy(&ballXVelocity[processBallBoundNumberTmp], &newBallXVelocity[processBallBoundNumberTmp], sizeof(double) * diffBallProcessNumber);
 #pragma omp section
-                memcpy(ballYVelocity, newBallYVelocity, sizeof(double) * ballNumber);
+                    memcpy(&ballYVelocity[processBallBoundNumberTmp], &newBallYVelocity[processBallBoundNumberTmp], sizeof(double) * diffBallProcessNumber);
 #pragma omp section
-                memcpy(ballValid, newBallValid, sizeof(int) * ballNumber);
+                    memcpy(&ballValid[processBallBoundNumberTmp], &newBallValid[processBallBoundNumberTmp], sizeof(int) * diffBallProcessNumber);
+                }
+            }
+            else if (id == numProc - 1)
+            {
+
+#pragma omp parallel sections
+                {
+#pragma omp section
+                    memcpy(&ballXPosition[0], &newBallXPosition[0], sizeof(double) * diffBallProcessNumber);
+#pragma omp section
+                    memcpy(&ballYPosition[0], &newBallYPosition[0], sizeof(double) * diffBallProcessNumber);
+#pragma omp section
+                    memcpy(&ballXVelocity[0], &newBallXVelocity[0], sizeof(double) * diffBallProcessNumber);
+#pragma omp section
+                    memcpy(&ballYVelocity[0], &newBallYVelocity[0], sizeof(double) * diffBallProcessNumber);
+#pragma omp section
+                    memcpy(&ballValid[0], &newBallValid[0], sizeof(int) * diffBallProcessNumber);
+                }
+            }
+            else
+            {
+#pragma omp parallel sections
+                {
+#pragma omp section
+                    memcpy(&ballXPosition[0], &newBallXPosition[0], sizeof(double) * processBallStartNumberTmp);
+#pragma omp section
+                    memcpy(&ballYPosition[0], &newBallYPosition[0], sizeof(double) * processBallStartNumberTmp);
+#pragma omp section
+                    memcpy(&ballXVelocity[0], &newBallXVelocity[0], sizeof(double) * processBallStartNumberTmp);
+#pragma omp section
+                    memcpy(&ballYVelocity[0], &newBallYVelocity[0], sizeof(double) * processBallStartNumberTmp);
+#pragma omp section
+                    memcpy(&ballValid[0], &newBallValid[0], sizeof(int) * processBallStartNumberTmp);
+
+#pragma omp section
+                    memcpy(&ballXPosition[processBallBoundNumberTmp], &newBallXPosition[processBallBoundNumberTmp], sizeof(double) * diffBallBoundProcessNumber);
+#pragma omp section
+                    memcpy(&ballYPosition[processBallBoundNumberTmp], &newBallYPosition[processBallBoundNumberTmp], sizeof(double) * diffBallBoundProcessNumber);
+#pragma omp section
+                    memcpy(&ballXVelocity[processBallBoundNumberTmp], &newBallXVelocity[processBallBoundNumberTmp], sizeof(double) * diffBallBoundProcessNumber);
+#pragma omp section
+                    memcpy(&ballYVelocity[processBallBoundNumberTmp], &newBallYVelocity[processBallBoundNumberTmp], sizeof(double) * diffBallBoundProcessNumber);
+#pragma omp section
+                    memcpy(&ballValid[processBallBoundNumberTmp], &newBallValid[processBallBoundNumberTmp], sizeof(int) * diffBallBoundProcessNumber);
+                }
             }
         }
     }
-    if (id == 0)
-    {
-        fclose(fp);
-        // endTime = MPI_Wtime();
-        // printf("total time used : %lf\n", endTime - startTime);
-    }
-    endTime = MPI_Wtime();
-    printf("rank %d use %lf\n", id, endTime - startTime);
+    end = MPI_Wtime();
+    printf("rank %dTime is %lf", id, end - start);
     MPI_Finalize();
-    return 0;
 }
